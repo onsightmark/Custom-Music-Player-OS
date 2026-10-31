@@ -1,0 +1,44 @@
+{
+  "repository": "https://github.com/cursor/plugins",
+  "revision": "ac4e25a0064cd600afdd605208bad72748cb019a",
+  "path": "thermos",
+  "license": "MIT",
+  "files": [
+    {
+      "path": "LICENSE",
+      "source": "LICENSE",
+      "blob": "ca2bba771cd39dbef6acf96b52481133983451f3"
+    },
+    {
+      "path": "vendor/thermos.md",
+      "source": "skills/thermos/SKILL.md",
+      "blob": "e7aeeafd1ed4200f4f6481136d3c3a92dc993011"
+    },
+    {
+      "path": "vendor/correctness.md",
+      "source": "skills/thermo-nuclear-review/SKILL.md",
+      "blob": "1aa5dfd03bc75bc9d0b250fa9a31826cb2a32cb4"
+    },
+    {
+      "path": "vendor/maintainability.md",
+      "source": "skills/thermo-nuclear-code-quality-review/SKILL.md",
+      "blob": "ac76a2bc88bb2d895e83ab1788aa584a82346cfc"
+    },
+    {
+      "path": "vendor/correctness-agent.md",
+      "source": "agents/thermo-nuclear-review-subagent.md",
+      "blob": "0253a283a4917122bb2f4888354558c348bf4d85"
+    },
+    {
+      "path": "vendor/maintainability-agent.md",
+      "source": "agents/thermo-nuclear-code-quality-review-subagent.md",
+      "blob": "08ccbaa97324cd0185b37315ab8cdcc380097c1a"
+    }
+  ],
+  "adaptations": [
+    {
+      "path": "SKILL.md",
+      "reason": "Project-local host and reviewer mapping."
+    }
+  ]
+}

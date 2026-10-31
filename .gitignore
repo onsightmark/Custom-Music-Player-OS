@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.local
+.env
+.env.*
+!.env.example
+playwright-report/
+test-results/
+.artifacts/
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+release/
+native/build/

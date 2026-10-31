@@ -1,0 +1,9 @@
+.agents/
+.codex/
+.artifacts/
+dist/
+node_modules/
+package-lock.json
+tests/fixtures/
+release/
+native/build/

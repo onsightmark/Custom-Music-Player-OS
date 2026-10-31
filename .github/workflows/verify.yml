@@ -1,0 +1,143 @@
+name: Verify On Sight Musica
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ONNXRUNTIME_NODE_INSTALL: skip
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm audit --omit=dev --audit-level=high
+
+  browsers:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            browsers: chromium firefox webkit
+            projects: --project=chromium --project=firefox --project=webkit
+          - os: windows-latest
+            browsers: chromium firefox
+            projects: --project=chromium --project=firefox
+          - os: macos-latest
+            browsers: chromium webkit
+            projects: --project=chromium --project=webkit
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps ${{ matrix.browsers }}
+      - name: Start the Linux audio service
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pulseaudio
+          pulseaudio --start --exit-idle-time=-1
+      - run: npm run build
+      - name: Prepare Windows audio and record real devices
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 2
+        run: ./scripts/prepare-windows-audio.ps1 -ReportPath .artifacts/playwright/windows-audio.json
+      - run: npm run test:e2e -- ${{ matrix.projects }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: browser-results-${{ matrix.os }}
+          path: .artifacts/playwright/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            executable: release/win-unpacked/On Sight Musica.exe
+          - os: macos-latest
+            executable: release/mac-arm64/On Sight Musica.app/Contents/MacOS/On Sight Musica
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run desktop:typecheck
+      - name: Build the native desktop application
+        id: desktop_build
+        run: npm run desktop:build
+      - name: Prepare Windows audio and record real devices
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 2
+        run: ./scripts/prepare-windows-audio.ps1 -ReportPath .artifacts/desktop/windows-audio.json
+      - name: Exercise the native player and wallpaper
+        run: npm run test:e2e:desktop
+      - name: Build unsigned desktop packages
+        id: desktop_package
+        if: ${{ !cancelled() && steps.desktop_build.outcome == 'success' }}
+        run: npx electron-builder --config electron-builder.config.cjs --publish never
+      - name: Exercise the packaged desktop application and wallpaper
+        if: ${{ !cancelled() && steps.desktop_package.outcome == 'success' }}
+        env:
+          MUSICA_DESKTOP_EXECUTABLE: ${{ matrix.executable }}
+          PLAYWRIGHT_JSON_OUTPUT_FILE: .artifacts/desktop/packaged/results.json
+        run: npm run test:e2e:desktop -- --reporter=json --output=.artifacts/desktop/packaged/results
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: desktop-results-${{ matrix.os }}
+          path: .artifacts/desktop/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: ${{ !cancelled() && steps.desktop_package.outcome == 'success' }}
+        with:
+          name: unsigned-desktop-${{ matrix.os }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+          retention-days: 7

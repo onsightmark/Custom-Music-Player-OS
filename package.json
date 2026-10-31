@@ -1,0 +1,66 @@
+{
+  "name": "on-sight-musica",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24.0.0 <25",
+    "npm": ">=11 <12"
+  },
+  "packageManager": "npm@11.9.0",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "typecheck": "tsc -b --pretty false",
+    "lint": "eslint src tests *.config.ts",
+    "verify:vendor": "node .agents/verify-vendor.mjs",
+    "check": "npm run typecheck && npm run desktop:typecheck && npm run lint && npm run format:check && npm run verify:vendor && npm run build",
+    "test:e2e": "playwright test",
+    "test:e2e:providers": "playwright test --config playwright.providers.config.ts",
+    "test:e2e:transcription": "playwright test --config playwright.transcription.config.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "desktop:typecheck": "tsc -p desktop/tsconfig.json",
+    "desktop:native": "node scripts/desktop-build-native.mjs",
+    "desktop:build": "npm run build && npm run desktop:native",
+    "desktop": "npm run desktop:build && electron .",
+    "desktop:package": "npm run desktop:build && electron-builder --config electron-builder.config.cjs --publish never",
+    "test:e2e:desktop": "playwright test --config playwright.desktop.config.ts"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.3.2",
+    "lucide-react": "1.65.0",
+    "onnxruntime-web": "1.31.0-dev.20260914-8d85527a0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "electron": "45.2.1",
+    "electron-builder": "26.18.0",
+    "eslint": "10.14.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.5.7",
+    "globals": "17.13.0",
+    "node-gyp": "13.1.0",
+    "prettier": "3.9.10",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1",
+    "vite": "8.3.5",
+    "vite-plugin-pwa": "2.0.0"
+  },
+  "main": "desktop/main.cjs",
+  "description": "A private music player with animated lyrics, glass controls and desktop wallpaper for Windows and macOS.",
+  "author": "On Sight Musica contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/onsightmark/Custom-Music-Player-OS.git"
+  }
+}
