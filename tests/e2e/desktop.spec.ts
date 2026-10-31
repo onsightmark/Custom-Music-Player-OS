@@ -1,6 +1,6 @@
-import { expect, test as base, type ElectronApplication, type Page } from '@playwright/test';
+import { expect, test as base, type ElectronApplication, type Page, type TestInfo } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -94,12 +94,37 @@ async function importLyrics(player: Page) {
 const position = (player: Page) =>
   player.locator('.local-media').evaluate((media: HTMLMediaElement) => media.currentTime);
 
+async function captureWindowsDesktop(testInfo: TestInfo, phase: string) {
+  let evidence;
+  try {
+    evidence = execFileSync(
+      'pwsh',
+      [
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-File',
+        resolve('tests/e2e/desktop-shell-diagnostics.ps1'),
+      ],
+      { encoding: 'utf8', timeout: 15_000, maxBuffer: 128 * 1024, windowsHide: true },
+    ).trim();
+    JSON.parse(evidence);
+  } catch (error) {
+    evidence = JSON.stringify({
+      diagnosticError: error instanceof Error ? error.message.slice(0, 1200) : 'The desktop probe failed.',
+    });
+  }
+  await testInfo.attach(`windows-desktop-${phase}`, { body: evidence, contentType: 'application/json' });
+  return evidence;
+}
+
 test('desktop shell isolates content and reports actual native window visibility', async ({ desktop }) => {
   const { app, player } = await desktop.launch();
   await expect(player).toHaveTitle(/On Sight Musica/);
   expect(player.url()).toBe('musica://app/index.html');
   expect(await player.evaluate(() => 'require' in window || 'process' in window)).toBe(false);
-  expect(await app.evaluate(({ app }) => app.getPath('userData'))).toBe(desktop.profile);
+  const userData = await app.evaluate(({ app }) => app.getPath('userData'));
+  expect(await realpath(userData)).toBe(await realpath(desktop.profile));
   const resources = await player.evaluate(async () => {
     const app = await fetch(location.href);
     const outside = await fetch('musica://app/%2e%2e%2felectron-builder.config.cjs');
@@ -167,22 +192,33 @@ test(
     await player.getByLabel('Import background', { exact: true }).setInputFiles(fixture('backdrop.webm'));
     await expect(player.getByRole('button', { name: 'Remove background', exact: true })).toBeVisible();
     await player.getByRole('button', { name: 'Close appearance', exact: true }).click();
+    const beforeDesktop =
+      process.platform === 'win32' ? await captureWindowsDesktop(testInfo, 'before-enable') : null;
     const newWindow = app.waitForEvent('window');
     await player.getByRole('button', { name: 'Start desktop wallpaper', exact: true }).click();
     const wallpaper = await newWindow;
-    await expect
-      .poll(
-        () =>
-          player.evaluate(async () => {
-            const state = await window.musicaDesktop?.getWallpaperState();
-            return { enabled: state?.enabled, error: state?.error };
-          }),
-        {
-          message:
-            'The actual OS must attach its wallpaper window; a missing shell is an acceptance failure.',
-        },
-      )
-      .toEqual({ enabled: true, error: null });
+    try {
+      await expect
+        .poll(
+          () =>
+            player.evaluate(async () => {
+              const state = await window.musicaDesktop?.getWallpaperState();
+              return { enabled: state?.enabled, error: state?.error };
+            }),
+          {
+            message:
+              'The actual OS must attach its wallpaper window; a missing shell is an acceptance failure.',
+          },
+        )
+        .toEqual({ enabled: true, error: null });
+    } catch (error) {
+      if (process.platform === 'win32') {
+        const afterDesktop = await captureWindowsDesktop(testInfo, 'after-failure');
+        console.info(`Windows desktop before enable: ${beforeDesktop?.slice(0, 16_000)}`);
+        console.info(`Windows desktop after failure: ${afterDesktop.slice(0, 16_000)}`);
+      }
+      throw error;
+    }
     await expect(wallpaper.getByRole('heading', { name: 'tone-a', exact: true })).toBeVisible();
     await expect(wallpaper.locator('audio, iframe')).toHaveCount(0);
     expect(
@@ -217,17 +253,46 @@ test(
       expect(attached).toBe(true);
     } else {
       const windowId = Number(nativeWindow.mediaId.split(':')[1]);
-      if (!Number.isSafeInteger(windowId)) throw new Error('The macOS wallpaper window has no capture ID.');
-      const script = `ObjC.import('CoreGraphics'); JSON.stringify(ObjC.deepUnwrap($.CGWindowListCopyWindowInfo($.kCGWindowListOptionAll, $.kCGNullWindowID)).filter(w => w.kCGWindowNumber === ${windowId}));`;
-      const windows: unknown = JSON.parse(
-        execFileSync('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script], { encoding: 'utf8' }),
+      if (!Number.isSafeInteger(windowId) || windowId <= 0 || windowId > 0xffff_ffff)
+        throw new Error('The macOS wallpaper window has no capture ID.');
+      const script = `
+import CoreGraphics
+import Foundation
+
+guard let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]],
+      let window = windows.first(where: {
+        ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == CGWindowID(${windowId})
+      }),
+      let layer = (window[kCGWindowLayer as String] as? NSNumber)?.intValue else {
+  throw NSError(domain: "OnSightMusicaDesktopE2E", code: 1, userInfo: [
+    NSLocalizedDescriptionKey: "Core Graphics did not report the actual wallpaper window layer."
+  ])
+}
+let observation: [String: Int] = [
+  "windowId": ${windowId},
+  "layer": layer,
+  "desktopIconLayer": Int(CGWindowLevelForKey(.desktopIconWindow))
+]
+let data = try JSONSerialization.data(withJSONObject: observation)
+print(String(decoding: data, as: UTF8.self))
+`;
+      const observation: unknown = JSON.parse(
+        execFileSync('/usr/bin/swift', ['-e', script], { encoding: 'utf8', timeout: 30_000 }),
       );
-      expect(Array.isArray(windows) && windows.length === 1).toBe(true);
-      if (!Array.isArray(windows) || !windows[0] || typeof windows[0].kCGWindowLayer !== 'number')
-        throw new Error('macOS did not report the wallpaper window layer.');
-      expect(windows[0].kCGWindowLayer).toBeLessThan(0);
+      if (
+        !observation ||
+        typeof observation !== 'object' ||
+        !('windowId' in observation) ||
+        !('layer' in observation) ||
+        typeof observation.layer !== 'number' ||
+        !('desktopIconLayer' in observation) ||
+        typeof observation.desktopIconLayer !== 'number'
+      )
+        throw new Error('The macOS window probe did not return valid layer measurements.');
+      expect(observation.windowId).toBe(windowId);
+      expect(observation.layer).toBeLessThan(observation.desktopIconLayer);
       await testInfo.attach('macos-window-layer', {
-        body: JSON.stringify(windows),
+        body: JSON.stringify(observation),
         contentType: 'application/json',
       });
     }
@@ -270,6 +335,11 @@ test(
     );
     await player.getByRole('button', { name: 'Select backdrop', exact: true }).click();
     await expect(wallpaper.getByRole('heading', { name: 'backdrop', exact: true })).toBeVisible();
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()
+        .find((item) => !item.webContents.getURL().includes('wallpaper=1'))
+        ?.hide(),
+    );
     await expect
       .poll(() => wallpaper.locator('video').evaluate((video: HTMLVideoElement) => video.videoWidth))
       .toBe(640);
@@ -301,6 +371,11 @@ test(
     const screenshot = testInfo.outputPath('native-wallpaper.png');
     await wallpaper.screenshot({ path: screenshot });
     await testInfo.attach('native-wallpaper', { path: screenshot, contentType: 'image/png' });
+    await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()
+        .find((item) => !item.webContents.getURL().includes('wallpaper=1'))
+        ?.show(),
+    );
     await player.getByRole('button', { name: 'Stop desktop wallpaper', exact: true }).click();
     await expect.poll(() => wallpaper.isClosed()).toBe(true);
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);

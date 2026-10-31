@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEventHandler } from 'react';
 import {
   ArrowDownToLine,
   Code2,
@@ -79,6 +79,12 @@ export function App() {
   );
 
   const consumePlayRequest = useCallback(() => setPlayRequest(null), []);
+
+  const openAdd: MouseEventHandler<HTMLButtonElement> = (event) => {
+    event.currentTarget.focus();
+    setPlayRequest(null);
+    setAdding(true);
+  };
 
   const changeAppearance = (patch: Partial<Appearance>) => {
     if (patch.customFont !== undefined && !/^[\p{L}\p{N} _+-]*$/u.test(patch.customFont)) {
@@ -229,7 +235,7 @@ export function App() {
           >
             <SlidersHorizontal size={19} />
           </button>
-          <button ref={addButton} className="secondary-button header-add" onClick={() => setAdding(true)}>
+          <button ref={addButton} className="secondary-button header-add" onClick={openAdd}>
             <Plus size={17} />
             Add music
           </button>
@@ -266,10 +272,7 @@ export function App() {
             }))
           }
           onToggleLyrics={() => changeAppearance({ showLyrics: !appearance.showLyrics })}
-          onAdd={() => {
-            setPlayRequest(null);
-            setAdding(true);
-          }}
+          onAdd={openAdd}
           onFullscreen={() => void fullscreen()}
           onRetry={() => {
             setPlayRequest(null);
@@ -334,7 +337,7 @@ export function App() {
                 };
               });
             }}
-            onAdd={() => setAdding(true)}
+            onAdd={openAdd}
             onShuffle={() => {
               const order = library.tracks.map((track) => track.id);
               for (let index = order.length - 1; index > 0; index -= 1) {

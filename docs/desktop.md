@@ -108,6 +108,12 @@ npm run desktop:build
 npm run test:e2e:desktop
 ```
 
+macOS verification requires Xcode Command Line Tools (`xcode-select --install`).
+The native test reads the actual wallpaper and desktop icon window levels with
+Swift and Core Graphics.
+Windows failure diagnostics use PowerShell 7 (`pwsh`) to read Explorer's window
+hierarchy without changing it.
+
 The suite launches the actual Electron app from `desktop/main.cjs`, imports real
 media and lyrics, and closes and restarts the application to check persistence.
 On Windows and macOS it must also attach a native wallpaper window, preserve one

@@ -66,11 +66,12 @@ test('wallpaper follows the real audio clock and persists a separately imported 
     .poll(() =>
       preview.getByLabel('Background video').evaluate((video: HTMLVideoElement) => video.readyState),
     )
-    .toBeGreaterThanOrEqual(2);
+    .toBeGreaterThanOrEqual(1);
   expect(
     await preview.getByLabel('Background video').evaluate((video: HTMLVideoElement) => video.muted),
   ).toBe(true);
 
+  await page.bringToFront();
   await page.getByRole('button', { name: 'Play', exact: true }).click();
   await preview.bringToFront();
   await expect.poll(() => clock(page)).toBeGreaterThan(0.5);
@@ -80,6 +81,14 @@ test('wallpaper follows the real audio clock and persists a separately imported 
       preview.getByLabel('Background video').evaluate((video: HTMLVideoElement) => video.currentTime),
     )
     .toBeGreaterThan(0.2);
+  await expect
+    .poll(() =>
+      preview
+        .getByLabel('Background video')
+        .evaluate((video: HTMLVideoElement) => video.getVideoPlaybackQuality().totalVideoFrames),
+    )
+    .toBeGreaterThan(1);
+  await page.bringToFront();
   await page.getByRole('button', { name: 'Pause', exact: true }).click();
   await expect(preview.locator('.wallpaper-status')).toContainText('Paused');
   await expect
@@ -99,10 +108,14 @@ test('wallpaper follows the real audio clock and persists a separately imported 
   await preview.bringToFront();
   await expect(preview.locator('.wallpaper-status')).toContainText('Listening');
   await expect(preview.locator('.lyric-line[aria-current="true"]')).toHaveText('A quiet pulse begins');
+  await page.bringToFront();
+  await page.getByRole('button', { name: 'Pause', exact: true }).click();
+  await expect(preview.locator('.wallpaper-status')).toContainText('Paused');
+  await preview.bringToFront();
   const screenshot = testInfo.outputPath('wallpaper-audio.png');
   await preview.screenshot({ path: screenshot });
   await testInfo.attach('wallpaper-audio', { path: screenshot, contentType: 'image/png' });
-  await page.getByRole('button', { name: 'Pause', exact: true }).click();
+  await page.bringToFront();
   await page.getByRole('button', { name: 'Customize appearance' }).click();
   await page.getByRole('button', { name: 'Remove background' }).click();
   await expect(preview.getByAltText('Your imported background')).toHaveCount(0);
@@ -121,14 +134,21 @@ test('a local video is mirrored silently and follows pause and lyric seeking', a
   const mirror = preview.getByLabel('Background video');
   await expect
     .poll(() => mirror.evaluate((video: HTMLVideoElement) => video.readyState))
-    .toBeGreaterThanOrEqual(2);
+    .toBeGreaterThanOrEqual(1);
+  await page.bringToFront();
   await page.getByRole('button', { name: 'Play', exact: true }).click();
   await preview.bringToFront();
   await expect.poll(() => clock(page)).toBeGreaterThan(0.5);
   await expect
     .poll(() => mirror.evaluate((video: HTMLVideoElement) => video.currentTime))
     .toBeGreaterThan(0.4);
+  await expect
+    .poll(() =>
+      mirror.evaluate((video: HTMLVideoElement) => video.getVideoPlaybackQuality().totalVideoFrames),
+    )
+    .toBeGreaterThan(1);
   expect(await mirror.evaluate((video: HTMLVideoElement) => video.muted)).toBe(true);
+  await page.bringToFront();
   await page.getByRole('button', { name: 'Pause', exact: true }).click();
   await page.getByRole('button', { name: 'Every color finds its place', exact: true }).click();
   await preview.bringToFront();

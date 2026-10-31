@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEventHandler } from 'react';
 import { ArrowUpRight, Headphones, Plus, Triangle } from 'lucide-react';
 import { LocalPlayer } from '../media/LocalPlayer';
 import { providerInfo } from '../providers/types';
@@ -20,7 +20,7 @@ type SessionProps = {
   onVolume: (volume: number) => void;
   onRepeat: () => void;
   onToggleLyrics: () => void;
-  onAdd: () => void;
+  onAdd: MouseEventHandler<HTMLButtonElement>;
   onFullscreen: () => void;
   onRetry: () => void;
   onPlayingChange: (playing: boolean) => void;

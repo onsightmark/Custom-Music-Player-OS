@@ -112,6 +112,78 @@ test('local audio uses a real media clock for play, pause, seek and keyboard con
   await expect.poll(() => media(page).evaluate((element: HTMLMediaElement) => element.paused)).toBe(true);
 });
 
+test('a real decoder failure stays visible until a new source is selected', async ({ page }, testInfo) => {
+  await importMedia(page, 'corrupt-vp8.webm', 'tone-b.wav');
+  await expect(page.getByRole('heading', { name: 'corrupt-vp8', exact: true })).toBeVisible();
+  await expect(page.locator('.track-state')).toHaveText('Ready when you are');
+  expect(await media(page).evaluate((element: HTMLMediaElement) => element.error)).toBeNull();
+  await importLyrics(page, 'words.lrc');
+  await page.getByRole('button', { name: 'Close lyric settings' }).click();
+  const failedMedia = await media(page).elementHandle();
+  if (!failedMedia) throw new Error('The imported video has no native media element.');
+  const nativeEvents = await failedMedia.evaluateHandle((element: HTMLMediaElement) => {
+    const events: { event: string; trusted: boolean; position: number; error: number | null }[] = [];
+    for (const name of ['playing', 'error', 'pause', 'ended', 'seeked']) {
+      element.addEventListener(name, (event) => {
+        events.push({
+          event: name,
+          trusted: event.isTrusted,
+          position: element.currentTime,
+          error: element.error?.code ?? null,
+        });
+      });
+    }
+    return events;
+  });
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect.poll(() => failedMedia.evaluate((element: HTMLMediaElement) => element.error?.code)).toBe(3);
+  await expect(page.getByRole('alert')).toContainText('Playback failed.');
+  await expect(page.locator('.track-state')).toHaveText('error');
+  const failedEvents = await nativeEvents.jsonValue();
+  const playingIndex = failedEvents.findIndex((event) => event.event === 'playing' && event.trusted);
+  const failureIndex = failedEvents.findIndex(
+    (event) => event.event === 'error' && event.trusted && event.error === 3,
+  );
+  expect(playingIndex).toBeGreaterThanOrEqual(0);
+  expect(failureIndex).toBeGreaterThan(playingIndex);
+
+  await expect
+    .poll(() =>
+      nativeEvents.evaluate((events) =>
+        events.some((event) => event.event === 'pause' && event.trusted && event.error === 3),
+      ),
+    )
+    .toBe(true);
+  const pausedAt = await position(page);
+  await page.getByRole('button', { name: 'A quiet pulse begins', exact: true }).click();
+  await page.waitForTimeout(350);
+  await expect(page.getByRole('alert')).toContainText('Playback failed.');
+  await expect(page.locator('.track-state')).toHaveText('error');
+  await expect(page.getByRole('heading', { name: 'corrupt-vp8', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeDisabled();
+  expect(Math.abs((await position(page)) - pausedAt)).toBeLessThan(0.06);
+  expect(await page.locator('.queue-track-title').allTextContents()).toEqual(['corrupt-vp8', 'tone-b']);
+  await testInfo.attach('native-decoder-failure', {
+    body: JSON.stringify({ events: await nativeEvents.jsonValue(), pausedAt }, null, 2),
+    contentType: 'application/json',
+  });
+
+  await page.getByRole('button', { name: 'Select tone-b', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'tone-b', exact: true })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect.poll(() => position(page)).toBeGreaterThan(0.4);
+  await expect(page.getByRole('button', { name: 'Pause', exact: true })).toBeEnabled();
+  expect(await media(page).evaluate((element: HTMLMediaElement) => element.error)).toBeNull();
+  expect(
+    await failedMedia.evaluate((element: HTMLMediaElement) => ({
+      connected: element.isConnected,
+      paused: element.paused,
+      source: element.getAttribute('src'),
+    })),
+  ).toEqual({ connected: false, paused: true, source: null });
+  await page.getByRole('button', { name: 'Pause', exact: true }).click();
+});
+
 test('natural track endings, repeat and queue edits retire the previous media', async ({ page }) => {
   await importMedia(page, 'tone-a.wav', 'tone-b.wav');
   await page.getByRole('button', { name: 'Next track', exact: true }).click();

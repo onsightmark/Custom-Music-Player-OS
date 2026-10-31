@@ -1,3 +1,4 @@
+import type { MouseEventHandler } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -19,7 +20,7 @@ type QueuePanelProps = {
   onSelect: (id: string) => void;
   onMove: (id: string, direction: -1 | 1) => void;
   onRemove: (id: string) => void;
-  onAdd: () => void;
+  onAdd: MouseEventHandler<HTMLButtonElement>;
   onShuffle: () => void;
 };
 

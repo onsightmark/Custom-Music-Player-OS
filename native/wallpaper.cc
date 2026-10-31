@@ -74,7 +74,7 @@ napi_value attach(napi_env env, napi_callback_info info) {
   GetWindowThreadProcessId(programManager, &managerProcess);
   if (!shellProcess || managerProcess != shellProcess) return fail(env, "Windows Explorer is unavailable. Start Explorer and try desktop mode again.");
   DWORD_PTR response = 0;
-  if (!SendMessageTimeoutW(programManager, 0x052C, 0, 0, SMTO_ABORTIFHUNG, 1000, &response)) {
+  if (!SendMessageTimeoutW(programManager, 0x052C, 0xD, 0x1, SMTO_ABORTIFHUNG, 1000, &response)) {
     return fail(env, "Windows Explorer did not respond to the desktop request.");
   }
   DesktopHost host;

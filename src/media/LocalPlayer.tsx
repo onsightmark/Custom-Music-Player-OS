@@ -32,11 +32,12 @@ export const LocalPlayer = forwardRef<PlayerControls, LocalPlayerProps>(function
       async play() {
         const media = mediaRef.current;
         const current = generation.current;
-        if (!media?.src) return;
+        const statusAtRequest = status.current;
+        if (!media?.src || statusAtRequest === 'error') return;
         try {
           await media.play();
         } catch (error) {
-          if (generation.current !== current) return;
+          if (generation.current !== current || status.current === 'error') return;
           if (error instanceof DOMException && error.name === 'AbortError') return;
           status.current =
             error instanceof DOMException && error.name === 'NotAllowedError' ? 'blocked' : 'error';
@@ -56,7 +57,13 @@ export const LocalPlayer = forwardRef<PlayerControls, LocalPlayerProps>(function
       },
       seek(seconds) {
         const media = mediaRef.current;
-        if (media && Number.isFinite(seconds) && Number.isFinite(media.duration)) {
+        if (
+          media &&
+          !media.error &&
+          status.current !== 'error' &&
+          Number.isFinite(seconds) &&
+          Number.isFinite(media.duration)
+        ) {
           media.currentTime = Math.max(0, Math.min(seconds, media.duration));
           status.current = media.ended ? 'ended' : media.paused ? 'paused' : 'playing';
           report.current.onSnapshot({
@@ -87,7 +94,7 @@ export const LocalPlayer = forwardRef<PlayerControls, LocalPlayerProps>(function
     report.current.onSnapshot({ status: 'loading', position: 0, duration: null });
 
     const publish = (nextStatus = status.current, error?: string) => {
-      if (retired) return;
+      if (retired || ((status.current === 'error' || media.error) && !error)) return;
       status.current = nextStatus;
       report.current.onSnapshot({
         status: nextStatus,
@@ -97,7 +104,14 @@ export const LocalPlayer = forwardRef<PlayerControls, LocalPlayerProps>(function
       });
     };
     const sample = (now: number) => {
-      if (retired || media.paused || media.ended || document.hidden) {
+      if (
+        retired ||
+        media.paused ||
+        media.ended ||
+        media.error ||
+        status.current === 'error' ||
+        document.hidden
+      ) {
         frame = 0;
         return;
       }
@@ -108,7 +122,8 @@ export const LocalPlayer = forwardRef<PlayerControls, LocalPlayerProps>(function
       frame = requestAnimationFrame(sample);
     };
     const startSampling = () => {
-      if (!frame && !document.hidden) frame = requestAnimationFrame(sample);
+      if (!frame && !document.hidden && !media.error && status.current !== 'error')
+        frame = requestAnimationFrame(sample);
     };
     const loaded = () => {
       window.clearTimeout(loadTimer);
@@ -124,6 +139,7 @@ export const LocalPlayer = forwardRef<PlayerControls, LocalPlayerProps>(function
       publish(media.ended ? 'ended' : 'paused');
     };
     const ended = () => {
+      if (media.error || status.current === 'error') return;
       paused();
       report.current.onEnded();
     };
@@ -135,9 +151,10 @@ export const LocalPlayer = forwardRef<PlayerControls, LocalPlayerProps>(function
       window.clearTimeout(loadTimer);
       cancelAnimationFrame(frame);
       frame = 0;
+      media.pause();
       publish(
         'error',
-        'This browser cannot decode the file. Try MP3, WAV, MP4 or WebM with a supported codec.',
+        'Playback failed. Check your audio output and reload the player. If it still fails, try another supported format.',
       );
     };
     const visibility = () => {
