@@ -51,30 +51,37 @@ function createWallpaperController({ url, secureWindow, onState }) {
         native = require('../native/build/Release/wallpaper.node');
       }
       const display = screen.getPrimaryDisplay();
-      const candidate = new BrowserWindow({
-        ...display.bounds,
-        title: 'On Sight Musica Desktop',
-        show: false,
-        frame: false,
-        focusable: false,
-        resizable: false,
-        movable: false,
-        minimizable: false,
-        maximizable: false,
-        fullscreenable: false,
-        skipTaskbar: true,
-        hasShadow: false,
-        backgroundColor: '#0b1117',
-        ...(process.platform === 'darwin' ? { type: 'desktop' } : {}),
-        webPreferences: {
-          preload: path.join(__dirname, 'preload.cjs'),
-          contextIsolation: true,
-          sandbox: true,
-          nodeIntegration: false,
-          webSecurity: true,
-        },
-      });
-      window = candidate;
+      const createCandidate = () => {
+        const candidate = new BrowserWindow({
+          ...display.bounds,
+          title: 'On Sight Musica Desktop',
+          show: false,
+          frame: false,
+          focusable: false,
+          resizable: false,
+          movable: false,
+          minimizable: false,
+          maximizable: false,
+          fullscreenable: false,
+          skipTaskbar: true,
+          hasShadow: false,
+          backgroundColor: '#0b1117',
+          ...(process.platform === 'darwin' ? { type: 'desktop' } : {}),
+          webPreferences: {
+            preload: path.join(__dirname, 'preload.cjs'),
+            contextIsolation: true,
+            sandbox: true,
+            nodeIntegration: false,
+            webSecurity: true,
+          },
+        });
+        window = candidate;
+        return candidate.getNativeWindowHandle();
+      };
+      if (native) native.createWindow(createCandidate);
+      else createCandidate();
+      const candidate = window;
+      if (!candidate) throw new Error('The desktop window could not be created.');
       candidate.webContents.setAudioMuted(true);
       candidate.setIgnoreMouseEvents(true);
       secureWindow(candidate);

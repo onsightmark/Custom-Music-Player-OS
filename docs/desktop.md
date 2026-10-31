@@ -87,9 +87,13 @@ If the Windows attachment module is missing, run `npm run desktop:native` and
 restart the application. Reinstalling a packaged app restores its bundled module.
 Do not run On Sight Musica as administrator to work around an attachment failure.
 
-Windows uses Explorer's WorkerW wallpaper window. Microsoft does not publish a
-stable wallpaper embedding API for this technique. On Sight Musica checks the
-window owner, the desktop hierarchy, and display scaling before attachment. An
+Windows uses Explorer's desktop hierarchy. In the traditional layout, the app
+becomes a child of the wallpaper WorkerW. In the raised desktop layout, a layered
+app window sits below the icon view and above WorkerW within Progman. That path
+requires the observed Explorer ownership, layer flags, and window order.
+Microsoft does not publish a stable wallpaper embedding API for this technique.
+On Sight Musica checks window ownership, the desktop hierarchy, and exact display
+scaling contexts before attachment. An
 unsupported shell layout or incompatible scaling mode produces an error without
 changing your desktop wallpaper settings. Closing the wallpaper window reveals
 the wallpaper already selected in Windows or macOS.
@@ -111,16 +115,38 @@ npm run test:e2e:desktop
 macOS verification requires Xcode Command Line Tools (`xcode-select --install`).
 The native test reads the actual wallpaper and desktop icon window levels with
 Swift and Core Graphics.
-Windows failure diagnostics use PowerShell 7 (`pwsh`) to read Explorer's window
-hierarchy without changing it.
+Windows diagnostics use PowerShell 7 (`pwsh`) to read Explorer's hierarchy and the
+two application windows without changing them. The native journey checks actual
+parent and window order after showing the wallpaper and hiding the controller,
+compares named DPI contexts, and verifies that stopping destroys the wallpaper
+HWND. It also captures the primary Windows desktop for visual review. That image
+is separate from the wallpaper renderer's own screenshot.
 
-The suite launches the actual Electron app from `desktop/main.cjs`, imports real
-media and lyrics, and closes and restarts the application to check persistence.
+The default suite launches the actual Electron app from `desktop/main.cjs`, imports
+real media and lyrics, and closes and restarts the application to check persistence.
 On Windows and macOS it must also attach a native wallpaper window, preserve one
 audible media owner, and keep the wallpaper advancing while the hidden player's
 decorative video pauses. A missing desktop session fails the native journey.
-These source-launch tests do not establish that an installer starts correctly;
-launch and exercise the packaged application before releasing it.
+
+CI also runs the same import, playback, lyric seek, and restart journey through the
+executable produced by Electron Builder. The launcher requires `app.isPackaged` on
+both starts and checks the running executable's actual path. Each journey uses a
+temporary profile; the restart reuses that profile. Packaged results are saved in
+`.artifacts/desktop/packaged/`, separately from the source-launch results. A failed
+native wallpaper test still fails the job even when packaging and this journey pass.
+
+To run that packaged journey locally, set `MUSICA_DESKTOP_EXECUTABLE` to the built
+app's executable, then run:
+
+```sh
+npm run test:e2e:desktop -- --grep "imported media and lyrics survive a real desktop application restart$"
+```
+
+The Windows executable is `release/win-unpacked/On Sight Musica.exe`. On Apple
+Silicon, it is `release/mac-arm64/On Sight Musica.app/Contents/MacOS/On Sight Musica`.
+An Intel macOS build uses `release/mac/` instead. This verifies the packaged app's
+runtime and bundled resources. Installing the NSIS or DMG, trusted launch, signing,
+and notarization remain separate release checks.
 
 On a Windows or macOS machine with an active graphical session, also verify that
 desktop icons remain clickable, local audio continues with the controller hidden,
@@ -130,7 +156,15 @@ A Linux Electron run does not establish those operating system behaviors.
 
 Windows attachment uses the documented
 [SetParent](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setparent)
-window operation and rejects incompatible DPI contexts to avoid changing the
-application's scaling mode. The Explorer discovery step remains an OS-specific
-compatibility boundary. Keep a release draft until its required target-system
-journeys and installation checks have passed.
+window operation. A short synchronous
+[thread DPI scope](https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-improvements-for-desktop-applications)
+creates only the wallpaper window using its validated desktop parent's context.
+The native boundary restores and verifies the exact previous thread context before
+the controller loads any page. It retains the exact-context attachment check and
+rediscovers the desktop after loading. The UI journey verifies that the existing
+player window and process DPI contexts remain unchanged. Exception-path restoration
+is covered by source review.
+
+Explorer discovery, mixed-monitor scaling, and trusted installation remain target
+system compatibility boundaries. Keep a release draft until its required
+target-system journeys and installation checks have passed.

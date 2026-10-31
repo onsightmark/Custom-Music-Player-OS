@@ -11,6 +11,10 @@ const fixture = (name: string) => resolve('tests/fixtures', name);
 
 const test = base.extend<{ desktop: DesktopSession }>({
   desktop: async ({ playwright }, runFixture, testInfo) => {
+    const configuredExecutable = process.env.MUSICA_DESKTOP_EXECUTABLE;
+    if (configuredExecutable !== undefined && !configuredExecutable.trim())
+      throw new Error('MUSICA_DESKTOP_EXECUTABLE must name a packaged application executable.');
+    const executablePath = configuredExecutable ? resolve(configuredExecutable) : undefined;
     const profile = await mkdtemp(join(tmpdir(), 'musica-desktop-e2e-'));
     const instances: RunningPlayer[] = [];
     const errors: string[] = [];
@@ -18,9 +22,9 @@ const test = base.extend<{ desktop: DesktopSession }>({
     const desktop = {
       profile,
       async launch() {
-        const args = [resolve('desktop/main.cjs'), `--user-data-dir=${profile}`];
+        const args = [...(executablePath ? [] : [resolve('desktop/main.cjs')]), `--user-data-dir=${profile}`];
         if (process.platform === 'linux' && process.getuid?.() === 0) args.push('--no-sandbox');
-        const app = await playwright._electron.launch({ args, timeout: 30_000 });
+        const app = await playwright._electron.launch({ executablePath, args, timeout: 30_000 });
         const observe = (page: Page) => {
           page.on('pageerror', (error) => errors.push(error.message));
           page.on('console', (message) => {
@@ -36,6 +40,19 @@ const test = base.extend<{ desktop: DesktopSession }>({
           instance.closed = true;
         });
         instances.push(instance);
+        const runtime = await app.evaluate(({ app }) => ({
+          platform: process.platform,
+          versions: process.versions,
+          isPackaged: app.isPackaged,
+          executable: process.execPath,
+          applicationPath: app.getAppPath(),
+        }));
+        await testInfo.attach(`runtime-${instances.length - 1}`, {
+          body: JSON.stringify(runtime, null, 2),
+          contentType: 'application/json',
+        });
+        expect(runtime.isPackaged).toBe(Boolean(executablePath));
+        if (executablePath) expect(await realpath(runtime.executable)).toBe(await realpath(executablePath));
         await expect(player.locator('.app')).toBeVisible();
         await expect.poll(() => player.evaluate(() => window.musicaDesktop?.isPlayerVisible())).toBe(true);
         return instance;
@@ -56,14 +73,6 @@ const test = base.extend<{ desktop: DesktopSession }>({
               });
             }
           }
-          await testInfo.attach(`runtime-${index}`, {
-            body: JSON.stringify(
-              await instance.app.evaluate(() => ({ platform: process.platform, versions: process.versions })),
-              null,
-              2,
-            ),
-            contentType: 'application/json',
-          });
           await instance.app.context().tracing.stop({ path: testInfo.outputPath(`trace-${index}.zip`) });
           await instance.app.close();
         }
@@ -94,9 +103,99 @@ async function importLyrics(player: Page) {
 const position = (player: Page) =>
   player.locator('.local-media').evaluate((media: HTMLMediaElement) => media.currentTime);
 
-async function captureWindowsDesktop(testInfo: TestInfo, phase: string) {
+type WindowsDesktopNode = {
+  handle: string;
+  className: string;
+  role: string;
+  parent: string;
+  dpiContext: string;
+  dpiName: string;
+  process: number;
+  thread: number;
+  depth: number;
+  visible: boolean;
+  layered: boolean;
+  transparent: boolean;
+  noRedirectionBitmap: boolean;
+  sameDpiAsParent: boolean;
+  sameDpiAsWallpaper: boolean;
+  layeredAlpha: number | null;
+};
+
+type WindowsDesktopSnapshot = {
+  applicationProcess: number;
+  truncated: boolean;
+  playerExists: boolean;
+  wallpaperExists: boolean;
+  processDpi: { context: string; name: string; awareness: number };
+  nodes: WindowsDesktopNode[];
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isWindowsNode(value: unknown): value is WindowsDesktopNode {
+  return (
+    isRecord(value) &&
+    ['handle', 'className', 'role', 'parent', 'dpiContext', 'dpiName'].every(
+      (key) => typeof value[key] === 'string',
+    ) &&
+    ['process', 'thread', 'depth'].every(
+      (key) => typeof value[key] === 'number' && Number.isSafeInteger(value[key]),
+    ) &&
+    [
+      'visible',
+      'layered',
+      'transparent',
+      'noRedirectionBitmap',
+      'sameDpiAsParent',
+      'sameDpiAsWallpaper',
+    ].every((key) => typeof value[key] === 'boolean') &&
+    (value.layeredAlpha === null ||
+      (typeof value.layeredAlpha === 'number' && value.layeredAlpha >= 0 && value.layeredAlpha <= 255))
+  );
+}
+
+function isWindowsSnapshot(value: unknown): value is WindowsDesktopSnapshot {
+  return (
+    isRecord(value) &&
+    typeof value.applicationProcess === 'number' &&
+    typeof value.truncated === 'boolean' &&
+    typeof value.playerExists === 'boolean' &&
+    typeof value.wallpaperExists === 'boolean' &&
+    isRecord(value.processDpi) &&
+    typeof value.processDpi.context === 'string' &&
+    typeof value.processDpi.name === 'string' &&
+    typeof value.processDpi.awareness === 'number' &&
+    Array.isArray(value.nodes) &&
+    value.nodes.every(isWindowsNode)
+  );
+}
+
+async function captureWindowsDesktop(
+  app: ElectronApplication,
+  testInfo: TestInfo,
+  phase: string,
+  previousWallpaper?: string,
+) {
   let evidence;
+  let data: WindowsDesktopSnapshot | null = null;
   try {
+    const handles = await app.evaluate(({ BrowserWindow }) => {
+      const windows = BrowserWindow.getAllWindows();
+      const handle = (window: Electron.BrowserWindow | undefined) => {
+        if (!window) return '';
+        const bytes = window.getNativeWindowHandle();
+        const value = bytes.length === 8 ? bytes.readBigUInt64LE() : BigInt(bytes.readUInt32LE());
+        return `0x${value.toString(16).toUpperCase()}`;
+      };
+      return {
+        process: process.pid,
+        player: handle(windows.find((window) => !window.webContents.getURL().includes('wallpaper=1'))),
+        wallpaper: handle(windows.find((window) => window.webContents.getURL().includes('wallpaper=1'))),
+      };
+    });
     evidence = execFileSync(
       'pwsh',
       [
@@ -105,17 +204,77 @@ async function captureWindowsDesktop(testInfo: TestInfo, phase: string) {
         '-NonInteractive',
         '-File',
         resolve('tests/e2e/desktop-shell-diagnostics.ps1'),
+        '-ApplicationProcess',
+        String(handles.process),
+        '-PlayerHandle',
+        handles.player,
+        '-WallpaperHandle',
+        handles.wallpaper || previousWallpaper || '',
       ],
       { encoding: 'utf8', timeout: 15_000, maxBuffer: 128 * 1024, windowsHide: true },
     ).trim();
-    JSON.parse(evidence);
+    const parsed: unknown = JSON.parse(evidence);
+    if (!isWindowsSnapshot(parsed))
+      throw new Error('The Windows desktop probe returned an invalid snapshot.');
+    data = parsed;
   } catch (error) {
     evidence = JSON.stringify({
       diagnosticError: error instanceof Error ? error.message.slice(0, 1200) : 'The desktop probe failed.',
     });
   }
   await testInfo.attach(`windows-desktop-${phase}`, { body: evidence, contentType: 'application/json' });
-  return evidence;
+  return { raw: evidence, data };
+}
+
+function checkWindowsPlacement(before: WindowsDesktopSnapshot, after: WindowsDesktopSnapshot) {
+  expect(before.truncated).toBe(false);
+  expect(after.truncated).toBe(false);
+  expect(after.playerExists).toBe(true);
+  expect(after.wallpaperExists).toBe(true);
+  expect(after.applicationProcess).toBe(before.applicationProcess);
+  expect(after.processDpi).toEqual(before.processDpi);
+  expect(after.processDpi.name).not.toBe('UNKNOWN');
+  const previousPlayer = before.nodes.find((node) => node.role === 'player');
+  const player = after.nodes.find((node) => node.role === 'player');
+  const wallpaper = after.nodes.find((node) => node.role === 'wallpaper');
+  const parent = after.nodes.find((node) => node.handle === wallpaper?.parent);
+  if (!previousPlayer || !player || !wallpaper || !parent)
+    throw new Error('The native snapshot is missing a player, wallpaper, or desktop parent.');
+  expect(player.handle).toBe(previousPlayer.handle);
+  expect(player.dpiContext).toBe(previousPlayer.dpiContext);
+  expect(player.dpiName).toBe(previousPlayer.dpiName);
+  expect(player.thread).toBe(previousPlayer.thread);
+  expect(wallpaper.process).toBe(after.applicationProcess);
+  expect(wallpaper.thread).toBe(player.thread);
+  expect(wallpaper.visible).toBe(true);
+  expect(wallpaper.transparent).toBe(true);
+  expect(wallpaper.sameDpiAsParent).toBe(true);
+  expect(parent.sameDpiAsWallpaper).toBe(true);
+  expect(wallpaper.dpiName).not.toBe('UNKNOWN');
+  expect(wallpaper.depth).toBe(parent.depth + 1);
+  if (parent.className === 'Progman') {
+    expect(parent.noRedirectionBitmap).toBe(true);
+    expect(wallpaper.layered).toBe(true);
+    expect(wallpaper.layeredAlpha).toBe(255);
+    const siblings = after.nodes.filter((node) => node.parent === parent.handle);
+    const icons = siblings.find((node) => node.className === 'SHELLDLL_DefView');
+    const worker = siblings.find((node) => node.className === 'WorkerW');
+    if (!icons || !worker) throw new Error('The raised desktop is missing its icons or wallpaper layer.');
+    expect(icons.layered).toBe(true);
+    expect(worker.visible).toBe(true);
+    expect(siblings.indexOf(icons)).toBeLessThan(siblings.indexOf(wallpaper));
+    expect(siblings.indexOf(wallpaper)).toBeLessThan(siblings.indexOf(worker));
+  } else {
+    expect(parent.className).toBe('WorkerW');
+    expect(
+      after.nodes.some((node) => node.parent === parent.handle && node.className === 'SHELLDLL_DefView'),
+    ).toBe(false);
+    const icons = after.nodes.find((node) => node.className === 'SHELLDLL_DefView');
+    const iconHost = after.nodes.find((node) => node.handle === icons?.parent);
+    if (!iconHost) throw new Error('The desktop icon host is missing from the native snapshot.');
+    expect(after.nodes.indexOf(iconHost)).toBeLessThan(after.nodes.indexOf(parent));
+  }
+  return wallpaper.handle;
 }
 
 test('desktop shell isolates content and reports actual native window visibility', async ({ desktop }) => {
@@ -141,7 +300,9 @@ test('desktop shell isolates content and reports actual native window visibility
   await expect(player.locator('.app')).toBeVisible();
 });
 
-test('imported media and lyrics survive a real desktop application restart', async ({ desktop }) => {
+test('imported media and lyrics survive a real desktop application restart', async ({
+  desktop,
+}, testInfo) => {
   const first = await desktop.launch();
   await importMedia(first.player, 'tone-a.wav');
   await importLyrics(first.player);
@@ -154,7 +315,7 @@ test('imported media and lyrics survive a real desktop application restart', asy
   const stopped = await position(first.player);
   await first.player.waitForTimeout(350);
   expect(Math.abs((await position(first.player)) - stopped)).toBeLessThan(0.06);
-  await first.app.context().tracing.stop();
+  await first.app.context().tracing.stop({ path: testInfo.outputPath('trace-before-restart.zip') });
   await first.app.close();
   const second = await desktop.launch();
   await expect(second.player.getByRole('heading', { name: 'tone-a', exact: true })).toBeVisible();
@@ -193,10 +354,8 @@ test(
     await expect(player.getByRole('button', { name: 'Remove background', exact: true })).toBeVisible();
     await player.getByRole('button', { name: 'Close appearance', exact: true }).click();
     const beforeDesktop =
-      process.platform === 'win32' ? await captureWindowsDesktop(testInfo, 'before-enable') : null;
-    const newWindow = app.waitForEvent('window');
+      process.platform === 'win32' ? await captureWindowsDesktop(app, testInfo, 'before-enable') : null;
     await player.getByRole('button', { name: 'Start desktop wallpaper', exact: true }).click();
-    const wallpaper = await newWindow;
     try {
       await expect
         .poll(
@@ -213,12 +372,14 @@ test(
         .toEqual({ enabled: true, error: null });
     } catch (error) {
       if (process.platform === 'win32') {
-        const afterDesktop = await captureWindowsDesktop(testInfo, 'after-failure');
-        console.info(`Windows desktop before enable: ${beforeDesktop?.slice(0, 16_000)}`);
-        console.info(`Windows desktop after failure: ${afterDesktop.slice(0, 16_000)}`);
+        const afterDesktop = await captureWindowsDesktop(app, testInfo, 'after-failure');
+        console.info(`Windows desktop before enable: ${beforeDesktop?.raw.slice(0, 16_000)}`);
+        console.info(`Windows desktop after failure: ${afterDesktop.raw.slice(0, 16_000)}`);
       }
       throw error;
     }
+    const wallpaper = app.windows().find((page) => page.url().includes('wallpaper=1'));
+    if (!wallpaper) throw new Error('The enabled desktop has no real wallpaper renderer.');
     await expect(wallpaper.getByRole('heading', { name: 'tone-a', exact: true })).toBeVisible();
     await expect(wallpaper.locator('audio, iframe')).toHaveCount(0);
     expect(
@@ -240,6 +401,7 @@ test(
     });
     expect(nativeWindow.muted).toBe(true);
     expect(nativeWindow.focusable).toBe(false);
+    let wallpaperHandle: string | undefined;
     if (process.platform === 'win32') {
       const attached = await app.evaluate(({ BrowserWindow }, addon) => {
         // eslint-disable-next-line @typescript-eslint/no-require-imports -- Node native addons use CommonJS loading inside Electron's main-process evaluator.
@@ -251,6 +413,10 @@ test(
         return native.isAttached(window.getNativeWindowHandle());
       }, resolve('native/build/Release/wallpaper.node'));
       expect(attached).toBe(true);
+      const afterDesktop = await captureWindowsDesktop(app, testInfo, 'after-show');
+      if (!beforeDesktop?.data || !afterDesktop.data)
+        throw new Error('Windows desktop diagnostics must succeed to verify native placement and DPI.');
+      wallpaperHandle = checkWindowsPlacement(beforeDesktop.data, afterDesktop.data);
     } else {
       const windowId = Number(nativeWindow.mediaId.split(':')[1]);
       if (!Number.isSafeInteger(windowId) || windowId <= 0 || windowId > 0xffff_ffff)
@@ -371,6 +537,27 @@ print(String(decoding: data, as: UTF8.self))
     const screenshot = testInfo.outputPath('native-wallpaper.png');
     await wallpaper.screenshot({ path: screenshot });
     await testInfo.attach('native-wallpaper', { path: screenshot, contentType: 'image/png' });
+    if (process.platform === 'win32') {
+      const composite = await app.evaluate(async ({ desktopCapturer, screen }) => {
+        const display = screen.getPrimaryDisplay();
+        const sources = await desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width: display.size.width, height: display.size.height },
+        });
+        const source = sources.find((item) => item.display_id === String(display.id));
+        if (!source || source.thumbnail.isEmpty())
+          throw new Error('Windows did not provide a primary desktop capture.');
+        return source.thumbnail.toPNG().toString('base64');
+      });
+      await testInfo.attach('windows-desktop-composite', {
+        body: Buffer.from(composite, 'base64'),
+        contentType: 'image/png',
+      });
+      const shownDesktop = await captureWindowsDesktop(app, testInfo, 'after-controller-hide');
+      if (!beforeDesktop?.data || !shownDesktop.data)
+        throw new Error('The visible wallpaper must have a readable native desktop placement.');
+      checkWindowsPlacement(beforeDesktop.data, shownDesktop.data);
+    }
     await app.evaluate(({ BrowserWindow }) =>
       BrowserWindow.getAllWindows()
         .find((item) => !item.webContents.getURL().includes('wallpaper=1'))
@@ -380,5 +567,15 @@ print(String(decoding: data, as: UTF8.self))
     await expect.poll(() => wallpaper.isClosed()).toBe(true);
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
     expect((await player.evaluate(() => window.musicaDesktop?.getWallpaperState()))?.enabled).toBe(false);
+    if (process.platform === 'win32') {
+      const stoppedDesktop = await captureWindowsDesktop(app, testInfo, 'after-stop', wallpaperHandle);
+      if (!beforeDesktop?.data || !stoppedDesktop.data)
+        throw new Error('The stopped desktop must have readable native cleanup evidence.');
+      expect(stoppedDesktop.data.wallpaperExists).toBe(false);
+      expect(stoppedDesktop.data.processDpi).toEqual(beforeDesktop.data.processDpi);
+      expect(stoppedDesktop.data.nodes.find((node) => node.role === 'player')?.dpiContext).toBe(
+        beforeDesktop.data.nodes.find((node) => node.role === 'player')?.dpiContext,
+      );
+    }
   },
 );

@@ -225,11 +225,12 @@ for (const field of ['repeat', 'theme', 'font', 'motion'] as const) {
     const raw = JSON.stringify(corrupted);
     await writeSavedJson(page, raw);
     await page.reload();
-    await expect(page.locator('.app-notice[role="status"]')).toContainText(
+    const errorText =
       field === 'repeat'
         ? 'The saved library has an unsupported format.'
-        : 'The saved appearance settings are invalid.',
-    );
+        : 'The saved appearance settings are invalid.';
+    const errorNotice = page.getByRole('status').filter({ hasText: errorText });
+    await expect(errorNotice).toHaveText(errorText);
     await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeDisabled();
     const rejected = await readProfile(page);
     expect(rejected.raw).toBe(raw);
@@ -245,7 +246,7 @@ for (const field of ['repeat', 'theme', 'font', 'motion'] as const) {
     await writeSavedJson(page, original.raw);
     await page.reload();
     await expect(page.getByRole('heading', { name: 'tone-a', exact: true })).toBeVisible();
-    await expect(page.locator('.app-notice[role="status"]')).toHaveCount(0);
+    await expect(errorNotice).toHaveCount(0);
     await page.getByRole('button', { name: 'Play', exact: true }).click();
     await expect.poll(() => position(page)).toBeGreaterThan(0.3);
     await page.getByRole('button', { name: 'Pause', exact: true }).click();
