@@ -117,12 +117,12 @@ jobs:
         id: desktop_package
         if: ${{ !cancelled() && steps.desktop_build.outcome == 'success' }}
         run: npx electron-builder --config electron-builder.config.cjs --publish never
-      - name: Exercise playback and persistence in the packaged application
+      - name: Exercise the packaged desktop application and wallpaper
         if: ${{ !cancelled() && steps.desktop_package.outcome == 'success' }}
         env:
           MUSICA_DESKTOP_EXECUTABLE: ${{ matrix.executable }}
           PLAYWRIGHT_JSON_OUTPUT_FILE: .artifacts/desktop/packaged/results.json
-        run: npm run test:e2e:desktop -- --grep "imported media and lyrics survive a real desktop application restart$" --reporter=json --output=.artifacts/desktop/packaged/results
+        run: npm run test:e2e:desktop -- --reporter=json --output=.artifacts/desktop/packaged/results
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:

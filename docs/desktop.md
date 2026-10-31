@@ -128,18 +128,20 @@ On Windows and macOS it must also attach a native wallpaper window, preserve one
 audible media owner, and keep the wallpaper advancing while the hidden player's
 decorative video pauses. A missing desktop session fails the native journey.
 
-CI also runs the same import, playback, lyric seek, and restart journey through the
-executable produced by Electron Builder. The launcher requires `app.isPackaged` on
-both starts and checks the running executable's actual path. Each journey uses a
-temporary profile; the restart reuses that profile. Packaged results are saved in
+CI also runs all three desktop journeys through the executable produced by Electron
+Builder: shell isolation, import/playback/lyrics across a restart, and native
+wallpaper placement and cleanup. The launcher requires `app.isPackaged` on every
+start and checks the running executable's actual path. The Windows probe loads the
+native addon from that packaged app's resources. Each journey uses a temporary
+profile; the restart reuses that profile. Packaged results are saved in
 `.artifacts/desktop/packaged/`, separately from the source-launch results. A failed
-native wallpaper test still fails the job even when packaging and this journey pass.
+source desktop journey still fails the job when packaging and the packaged suite succeed.
 
-To run that packaged journey locally, set `MUSICA_DESKTOP_EXECUTABLE` to the built
+To run that packaged suite locally, set `MUSICA_DESKTOP_EXECUTABLE` to the built
 app's executable, then run:
 
 ```sh
-npm run test:e2e:desktop -- --grep "imported media and lyrics survive a real desktop application restart$"
+npm run test:e2e:desktop
 ```
 
 The Windows executable is `release/win-unpacked/On Sight Musica.exe`. On Apple

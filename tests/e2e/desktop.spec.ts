@@ -403,20 +403,42 @@ test(
     expect(nativeWindow.focusable).toBe(false);
     let wallpaperHandle: string | undefined;
     if (process.platform === 'win32') {
-      const attached = await app.evaluate(({ BrowserWindow }, addon) => {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports -- Node native addons use CommonJS loading inside Electron's main-process evaluator.
-        const native: { isAttached: (handle: Buffer) => boolean } = require(addon);
-        const window = BrowserWindow.getAllWindows().find((item) =>
-          item.webContents.getURL().includes('wallpaper=1'),
-        );
-        if (!window) throw new Error('The Windows wallpaper window disappeared.');
-        return native.isAttached(window.getNativeWindowHandle());
-      }, resolve('native/build/Release/wallpaper.node'));
-      expect(attached).toBe(true);
       const afterDesktop = await captureWindowsDesktop(app, testInfo, 'after-show');
       if (!beforeDesktop?.data || !afterDesktop.data)
         throw new Error('Windows desktop diagnostics must succeed to verify native placement and DPI.');
       wallpaperHandle = checkWindowsPlacement(beforeDesktop.data, afterDesktop.data);
+      const attachment = await app.evaluate(
+        ({ app, BrowserWindow }, source) => {
+          const { createRequire } = process.getBuiltinModule('node:module');
+          const { join } = process.getBuiltinModule('node:path');
+          const packageFile = app.isPackaged ? join(app.getAppPath(), 'package.json') : source.packageFile;
+          const addon = app.isPackaged
+            ? join(app.getAppPath(), 'native/build/Release/wallpaper.node')
+            : source.addon;
+          const native: unknown = createRequire(packageFile)(addon);
+          if (
+            !native ||
+            typeof native !== 'object' ||
+            !('isAttached' in native) ||
+            typeof native.isAttached !== 'function'
+          )
+            throw new Error('The loaded Windows addon has no attachment probe.');
+          const window = BrowserWindow.getAllWindows().find((item) =>
+            item.webContents.getURL().includes('wallpaper=1'),
+          );
+          if (!window) throw new Error('The Windows wallpaper window disappeared.');
+          const attached: unknown = native.isAttached(window.getNativeWindowHandle());
+          if (typeof attached !== 'boolean')
+            throw new Error('The Windows addon returned an invalid attachment result.');
+          return { attached, addon, packageFile };
+        },
+        { packageFile: resolve('package.json'), addon: resolve('native/build/Release/wallpaper.node') },
+      );
+      await testInfo.attach('windows-native-addon', {
+        body: JSON.stringify(attachment, null, 2),
+        contentType: 'application/json',
+      });
+      expect(attachment.attached).toBe(true);
     } else {
       const windowId = Number(nativeWindow.mediaId.split(':')[1]);
       if (!Number.isSafeInteger(windowId) || windowId <= 0 || windowId > 0xffff_ffff)
