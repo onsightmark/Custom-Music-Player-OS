@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prism Pstack"
+  short_description: "Choose engineering workflows for the Prism music player"
+  default_prompt: "Use $pstack to choose and apply the relevant workflow for this Prism change."
