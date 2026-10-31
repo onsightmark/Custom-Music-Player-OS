@@ -57,6 +57,7 @@ function createWallpaperController({ url, secureWindow, onState }) {
           title: 'On Sight Musica Desktop',
           show: false,
           frame: false,
+          thickFrame: false,
           focusable: false,
           resizable: false,
           movable: false,
