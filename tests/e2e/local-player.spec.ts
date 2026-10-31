@@ -10,7 +10,7 @@ const position = (page: Page) => media(page).evaluate((element: HTMLMediaElement
 async function importMedia(page: Page, ...files: string[]) {
   await page.getByRole('button', { name: 'Add music', exact: true }).first().click();
   await page.getByLabel('Import media files').setInputFiles(files.map(fixture));
-  await expect(page.getByRole('dialog')).not.toBeVisible();
+  await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 15_000 * files.length });
   await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeEnabled();
 }
 

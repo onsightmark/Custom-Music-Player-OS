@@ -230,7 +230,7 @@ napi_value attach(napi_env env, napi_callback_info info) {
     return fail(env, "The primary display could not be mapped to the desktop.");
   const LONG_PTR originalStyle = GetWindowLongPtrW(window, GWL_STYLE);
   SetLastError(0);
-  SetWindowLongPtrW(window, GWL_STYLE, (originalStyle | WS_CHILD) & ~WS_POPUP);
+  SetWindowLongPtrW(window, GWL_STYLE, (originalStyle | WS_CHILD) & ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME));
   if (GetLastError() != 0) return fail(env, "The wallpaper window style could not be set.");
   if (host.layout == DesktopLayout::Raised) {
     const LONG_PTR style = GetWindowLongPtrW(window, GWL_EXSTYLE);

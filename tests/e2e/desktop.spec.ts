@@ -103,6 +103,8 @@ async function importLyrics(player: Page) {
 const position = (player: Page) =>
   player.locator('.local-media').evaluate((media: HTMLMediaElement) => media.currentTime);
 
+type WindowsRect = [number, number, number, number];
+
 type WindowsDesktopNode = {
   handle: string;
   className: string;
@@ -120,6 +122,9 @@ type WindowsDesktopNode = {
   sameDpiAsParent: boolean;
   sameDpiAsWallpaper: boolean;
   layeredAlpha: number | null;
+  rect: WindowsRect | null;
+  clientRect: WindowsRect | null;
+  clientScreenRect: WindowsRect | null;
 };
 
 type WindowsDesktopSnapshot = {
@@ -127,12 +132,18 @@ type WindowsDesktopSnapshot = {
   truncated: boolean;
   playerExists: boolean;
   wallpaperExists: boolean;
+  probeDpiName: string;
+  primaryDisplayRect: WindowsRect;
   processDpi: { context: string; name: string; awareness: number };
   nodes: WindowsDesktopNode[];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isWindowsRect(value: unknown): value is WindowsRect {
+  return Array.isArray(value) && value.length === 4 && value.every(Number.isSafeInteger);
 }
 
 function isWindowsNode(value: unknown): value is WindowsDesktopNode {
@@ -152,6 +163,9 @@ function isWindowsNode(value: unknown): value is WindowsDesktopNode {
       'sameDpiAsParent',
       'sameDpiAsWallpaper',
     ].every((key) => typeof value[key] === 'boolean') &&
+    ['rect', 'clientRect', 'clientScreenRect'].every(
+      (key) => value[key] === null || isWindowsRect(value[key]),
+    ) &&
     (value.layeredAlpha === null ||
       (typeof value.layeredAlpha === 'number' && value.layeredAlpha >= 0 && value.layeredAlpha <= 255))
   );
@@ -164,6 +178,8 @@ function isWindowsSnapshot(value: unknown): value is WindowsDesktopSnapshot {
     typeof value.truncated === 'boolean' &&
     typeof value.playerExists === 'boolean' &&
     typeof value.wallpaperExists === 'boolean' &&
+    typeof value.probeDpiName === 'string' &&
+    isWindowsRect(value.primaryDisplayRect) &&
     isRecord(value.processDpi) &&
     typeof value.processDpi.context === 'string' &&
     typeof value.processDpi.name === 'string' &&
@@ -234,6 +250,9 @@ function checkWindowsPlacement(before: WindowsDesktopSnapshot, after: WindowsDes
   expect(after.applicationProcess).toBe(before.applicationProcess);
   expect(after.processDpi).toEqual(before.processDpi);
   expect(after.processDpi.name).not.toBe('UNKNOWN');
+  expect(before.probeDpiName).toBe('PER_MONITOR_AWARE_V2');
+  expect(after.probeDpiName).toBe('PER_MONITOR_AWARE_V2');
+  expect(after.primaryDisplayRect).toEqual(before.primaryDisplayRect);
   const previousPlayer = before.nodes.find((node) => node.role === 'player');
   const player = after.nodes.find((node) => node.role === 'player');
   const wallpaper = after.nodes.find((node) => node.role === 'wallpaper');
@@ -252,6 +271,16 @@ function checkWindowsPlacement(before: WindowsDesktopSnapshot, after: WindowsDes
   expect(parent.sameDpiAsWallpaper).toBe(true);
   expect(wallpaper.dpiName).not.toBe('UNKNOWN');
   expect(wallpaper.depth).toBe(parent.depth + 1);
+  expect(wallpaper.rect, 'The wallpaper outer bounds must cover the primary display').toEqual(
+    after.primaryDisplayRect,
+  );
+  expect(wallpaper.clientScreenRect, 'The drawable wallpaper must reach every outer window edge').toEqual(
+    wallpaper.rect,
+  );
+  const [left, top, right, bottom] = after.primaryDisplayRect;
+  expect(right).toBeGreaterThan(left);
+  expect(bottom).toBeGreaterThan(top);
+  expect(wallpaper.clientRect).toEqual([0, 0, right - left, bottom - top]);
   if (parent.className === 'Progman') {
     expect(parent.noRedirectionBitmap).toBe(true);
     expect(wallpaper.layered).toBe(true);

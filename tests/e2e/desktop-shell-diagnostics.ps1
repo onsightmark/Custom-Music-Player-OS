@@ -19,6 +19,10 @@ public sealed class MusicaDesktopProbe {
   private delegate bool EnumWindow(IntPtr window, IntPtr parameter);
   [StructLayout(LayoutKind.Sequential)]
   private struct Rect { public int Left, Top, Right, Bottom; }
+  [StructLayout(LayoutKind.Sequential)]
+  private struct Point { public int X, Y; }
+  [StructLayout(LayoutKind.Sequential)]
+  private struct MonitorInfo { public uint Size; public Rect Monitor, Work; public uint Flags; }
 
   [DllImport("user32.dll")] private static extern IntPtr GetShellWindow();
   [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -33,8 +37,15 @@ public sealed class MusicaDesktopProbe {
   private static extern int GetWindowLong(IntPtr window, int index);
   [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
   [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out Rect rect);
+  [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr window, out Rect rect);
+  [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr window, ref Point point);
+  [DllImport("user32.dll")] private static extern IntPtr MonitorFromPoint(Point point, uint flags);
+  [DllImport("user32.dll", EntryPoint = "GetMonitorInfoW")]
+  private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
   [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr window);
   [DllImport("user32.dll")] private static extern IntPtr GetWindowDpiAwarenessContext(IntPtr window);
+  [DllImport("user32.dll")] private static extern IntPtr GetThreadDpiAwarenessContext();
+  [DllImport("user32.dll")] private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
   [DllImport("user32.dll")] private static extern int GetAwarenessFromDpiAwarenessContext(IntPtr context);
   [DllImport("user32.dll")] private static extern bool AreDpiAwarenessContextsEqual(IntPtr first, IntPtr second);
   [DllImport("user32.dll")] private static extern IntPtr GetDpiAwarenessContextForProcess(IntPtr process);
@@ -110,6 +121,11 @@ public sealed class MusicaDesktopProbe {
       uint exStyle = unchecked((uint)GetWindowLong(window, -20));
       Rect rect;
       bool hasRect = GetWindowRect(window, out rect);
+      Rect client;
+      bool hasClient = GetClientRect(window, out client);
+      Point clientStart = new Point { X = client.Left, Y = client.Top };
+      Point clientEnd = new Point { X = client.Right, Y = client.Bottom };
+      bool hasClientScreen = hasClient && ClientToScreen(window, ref clientStart) && ClientToScreen(window, ref clientEnd);
       uint key, layeredFlags;
       byte alpha;
       bool hasAlpha = GetLayeredWindowAttributes(window, out key, out alpha, out layeredFlags);
@@ -129,7 +145,9 @@ public sealed class MusicaDesktopProbe {
         dpiName = DpiName(dpiContext),
         sameDpiAsParent = AreDpiAwarenessContextsEqual(dpiContext, GetWindowDpiAwarenessContext(parent)),
         sameDpiAsWallpaper = AreDpiAwarenessContextsEqual(dpiContext, GetWindowDpiAwarenessContext(wallpaper)),
-        rect = hasRect ? new int[] { rect.Left, rect.Top, rect.Right, rect.Bottom } : null
+        rect = hasRect ? new int[] { rect.Left, rect.Top, rect.Right, rect.Bottom } : null,
+        clientRect = hasClient ? new int[] { client.Left, client.Top, client.Right, client.Bottom } : null,
+        clientScreenRect = hasClientScreen ? new int[] { clientStart.X, clientStart.Y, clientEnd.X, clientEnd.Y } : null
       });
     }
     if (ownWindow) return;
@@ -143,6 +161,20 @@ public sealed class MusicaDesktopProbe {
   }
 
   public static object Capture(uint applicationProcess, string player, string wallpaper) {
+    IntPtr previous = SetThreadDpiAwarenessContext(new IntPtr(-4));
+    if (previous == IntPtr.Zero) throw new InvalidOperationException("The probe could not select physical-pixel coordinates.");
+    try {
+      if (!AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(), new IntPtr(-4)))
+        throw new InvalidOperationException("The probe did not retain physical-pixel coordinates.");
+      return CaptureDesktop(applicationProcess, player, wallpaper);
+    } finally {
+      if (SetThreadDpiAwarenessContext(previous) == IntPtr.Zero ||
+          !AreDpiAwarenessContextsEqual(GetThreadDpiAwarenessContext(), previous))
+        throw new InvalidOperationException("The probe could not restore its thread DPI context.");
+    }
+  }
+
+  private static object CaptureDesktop(uint applicationProcess, string player, string wallpaper) {
     MusicaDesktopProbe probe = new MusicaDesktopProbe();
     probe.applicationProcess = applicationProcess;
     probe.player = ReadHandle(player, applicationProcess);
@@ -160,6 +192,9 @@ public sealed class MusicaDesktopProbe {
     }
     probe.Visit(probe.player, 0);
     probe.Visit(probe.wallpaper, 0);
+    MonitorInfo primary = new MonitorInfo { Size = (uint)Marshal.SizeOf(typeof(MonitorInfo)) };
+    if (!GetMonitorInfo(MonitorFromPoint(new Point { X = 0, Y = 0 }, 1), ref primary) || (primary.Flags & 1) == 0)
+      throw new InvalidOperationException("The primary display bounds could not be read.");
     const string versionKey = @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion";
     return new {
       osVersion = Environment.OSVersion.Version.ToString(),
@@ -169,6 +204,8 @@ public sealed class MusicaDesktopProbe {
       updateBuildRevision = Registry.GetValue(versionKey, "UBR", null),
       shell = Hex(shell), shellProcess = probe.shellProcess,
       progman = Hex(progman), progmanProcess,
+      probeDpiName = DpiName(GetThreadDpiAwarenessContext()),
+      primaryDisplayRect = new int[] { primary.Monitor.Left, primary.Monitor.Top, primary.Monitor.Right, primary.Monitor.Bottom },
       applicationProcess, processDpi = probe.ReadProcessDpi(),
       requestedPlayer = Hex(probe.player), requestedWallpaper = Hex(probe.wallpaper),
       playerExists = IsWindow(probe.player), wallpaperExists = IsWindow(probe.wallpaper),

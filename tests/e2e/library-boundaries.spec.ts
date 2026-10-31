@@ -79,7 +79,7 @@ async function holdLibraryWrite(page: Page) {
     });
     let released = false;
     let reads = 0;
-    const startedAt = performance.now();
+    const startedAt = performance.timeOrigin + performance.now();
     const transaction = database.transaction(['library', 'files'], 'readwrite');
     const store = transaction.objectStore('library');
     const timeout = window.setTimeout(() => {
@@ -90,7 +90,7 @@ async function holdLibraryWrite(page: Page) {
         transaction.oncomplete = () => {
           window.clearTimeout(timeout);
           database.close();
-          resolve({ startedAt, finishedAt: performance.now(), reads });
+          resolve({ startedAt, finishedAt: performance.timeOrigin + performance.now(), reads });
         };
         transaction.onabort = () => {
           window.clearTimeout(timeout);
@@ -141,7 +141,7 @@ test('a peer selection survives an actual track ending queued behind a real stor
         observation.ended = {
           trusted: event.isTrusted,
           position: element.currentTime,
-          at: performance.now(),
+          at: performance.timeOrigin + performance.now(),
           source: element.currentSrc,
         };
       },
@@ -149,26 +149,50 @@ test('a peer selection survives an actual track ending queued behind a real stor
     );
     return observation;
   });
+  const peerSelection = await peer
+    .getByRole('button', { name: 'Select tone-b', exact: true })
+    .evaluateHandle((button) => {
+      const observation: { click: null | { trusted: boolean; at: number } } = { click: null };
+      button.addEventListener(
+        'click',
+        (event) => {
+          observation.click = {
+            trusted: event.isTrusted,
+            at: performance.timeOrigin + performance.now(),
+          };
+        },
+        { once: true, capture: true },
+      );
+      return observation;
+    });
+  await page.bringToFront();
   const seek = page.getByRole('slider', { name: 'Seek', exact: true });
   const bounds = await seek.boundingBox();
   if (!bounds) throw new Error('The real seek control has no visible bounds.');
-  await seek.click({ position: { x: bounds.width * 0.82, y: bounds.height / 2 } });
-  expect(await position(page)).toBeGreaterThan(6);
+  await seek.click({ position: { x: bounds.width * 0.4, y: bounds.height / 2 } });
+  const startPosition = await position(page);
+  expect(startPosition).toBeGreaterThan(3);
+  expect(startPosition).toBeLessThan(4);
   const hold = await holdLibraryWrite(page);
   let contention;
   try {
     await page.getByRole('button', { name: 'Play', exact: true }).click();
-    await expect.poll(() => position(page), { intervals: [25] }).toBeGreaterThan(6.9);
-    const selectedAt = await position(page);
+    await expect.poll(() => position(page), { intervals: [25] }).toBeGreaterThan(startPosition + 0.1);
+    const positionBeforeClick = await position(page);
+    await peer.bringToFront();
     await peer.getByRole('button', { name: 'Select tone-b', exact: true }).click();
     await expect(peer.getByRole('heading', { name: 'tone-a', exact: true })).toBeVisible();
     await expect
       .poll(() => naturalEnding.evaluate((observation) => observation.ended), { intervals: [25] })
       .not.toBeNull();
     const ending = await naturalEnding.evaluate((observation) => observation.ended);
-    expect(ending?.trusted).toBe(true);
-    expect(ending?.position).toBeCloseTo(8, 1);
-    contention = { selectedAt, ending };
+    const click = await peerSelection.evaluate((observation) => observation.click);
+    if (!click || !ending) throw new Error('The real peer click and natural ending must both be observed.');
+    contention = { positionBeforeClick, click, ending };
+    expect(click.trusted).toBe(true);
+    expect(ending.trusted).toBe(true);
+    expect(ending.position).toBeCloseTo(8, 1);
+    expect(click.at).toBeLessThan(ending.at);
   } finally {
     const transaction = await hold.evaluate(async (hold) => {
       hold.release();
@@ -179,6 +203,10 @@ test('a peer selection survives an actual track ending queued behind a real stor
       contentType: 'application/json',
     });
     await hold.dispose();
+    if (contention) {
+      expect(contention.click.at).toBeGreaterThanOrEqual(transaction.startedAt);
+      expect(contention.ending.at).toBeLessThan(transaction.finishedAt);
+    }
   }
   for (const window of [page, peer]) {
     await expect(window.getByRole('heading', { name: 'tone-b', exact: true })).toBeVisible();
@@ -203,6 +231,7 @@ test('a peer selection survives an actual track ending queued behind a real stor
   };
   expect(saved.tracks.find((track) => track.id === saved.activeId)?.title).toBe('tone-b');
   await peer.getByRole('button', { name: 'Pause', exact: true }).click();
+  await peerSelection.dispose();
   await naturalEnding.dispose();
   await retired.dispose();
 });
